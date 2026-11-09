@@ -1,0 +1,12 @@
+# Build environment for the portable Linux binary.
+# Ubuntu 22.04 = glibc 2.35: the result runs on any distro with glibc >= 2.35
+# (Ubuntu 22.04+, Debian 12+, Fedora 36+, Mint 21+, Arch, openSUSE Tumbleweed, ...).
+FROM docker.io/library/ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        g++ cmake ninja-build pkg-config file binutils ca-certificates \
+        libasound2-dev libfreetype-dev libfontconfig1-dev \
+        libx11-dev libxext-dev libxrandr-dev libxinerama-dev libxcursor-dev \
+        libxcomposite-dev libxrender-dev libxi-dev \
+    && rm -rf /var/lib/apt/lists/*

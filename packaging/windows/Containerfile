@@ -1,0 +1,42 @@
+# Cross-compilation environment: Linux host -> Windows 10/11 x64 .exe
+# clang-cl + lld-link (LLVM) against the Microsoft CRT + Windows SDK fetched by xwin.
+# Building this image downloads the MSVC CRT and Windows SDK from Microsoft, which
+# means accepting Microsoft's license for them (https://go.microsoft.com/fwlink/?LinkId=2086102).
+FROM docker.io/library/ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        clang-20 lld-20 llvm-20 cmake ninja-build curl ca-certificates \
+        g++ pkg-config libfreetype-dev libfontconfig1-dev \
+    && rm -rf /var/lib/apt/lists/* \
+    && for t in clang lld-link llvm-rc llvm-mt llvm-lib llvm-ar; do \
+           ln -sf "/usr/lib/llvm-20/bin/$t" "/usr/local/bin/$t"; \
+       done \
+    && ln -sf /usr/lib/llvm-20/bin/clang /usr/local/bin/clang-cl \
+    && clang-cl --version && lld-link --version && llvm-rc /? >/dev/null && llvm-mt /? >/dev/null
+# juceaide (JUCE's build helper) is compiled for the Linux host with g++; the app with clang-cl.
+# LLVM 20: the current MSVC STL (from xwin) refuses Clang < 19.
+
+ARG XWIN_VERSION=0.10.0
+ARG XWIN_SHA256=d870eb4b2f390878af6da1ccd3cf321d22fcb72720984853b4be732ae597fc88
+RUN curl -fsSL -o /tmp/xwin.tgz \
+        "https://github.com/Jake-Shadle/xwin/releases/download/${XWIN_VERSION}/xwin-${XWIN_VERSION}-x86_64-unknown-linux-musl.tar.gz" \
+    && echo "${XWIN_SHA256}  /tmp/xwin.tgz" | sha256sum -c - \
+    && tar -xzf /tmp/xwin.tgz -C /tmp \
+    && mv /tmp/xwin-*/xwin /usr/local/bin/xwin \
+    && xwin --accept-license --arch x86_64 --cache-dir /tmp/xwin-cache splat --output /xwin \
+    && rm -rf /tmp/xwin*
+
+# The UCRT's math.h defines NAN as (INFINITY * 0.0F), which MSVC accepts in constexpr but Clang
+# rejects (breaks JUCE's bundled HarfBuzz). Use Clang's builtins when compiling with Clang.
+RUN f=/xwin/sdk/include/ucrt/math.h \
+    && sed -i 's/\r$//' "$f" \
+    && grep -q '^#define INFINITY   ((float)(_HUGE_ENUF \* _HUGE_ENUF))$' "$f" \
+    && grep -q '^#define NAN        ((float)(INFINITY \* 0.0F))$' "$f" \
+    && sed -i \
+        -e 's|^#define INFINITY   ((float)(_HUGE_ENUF \* _HUGE_ENUF))$|#if defined(__clang__)\n#define INFINITY __builtin_inff()\n#else\n#define INFINITY ((float)(_HUGE_ENUF * _HUGE_ENUF))\n#endif|' \
+        -e 's|^#define NAN        ((float)(INFINITY \* 0.0F))$|#if defined(__clang__)\n#define NAN __builtin_nanf("")\n#else\n#define NAN ((float)(INFINITY * 0.0F))\n#endif|' \
+        "$f" \
+    && grep -q '__builtin_nanf' "$f"
+
+COPY clang-cl-toolchain.cmake /opt/clang-cl-toolchain.cmake
